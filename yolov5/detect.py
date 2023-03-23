@@ -165,6 +165,7 @@ def run(
         dnn=False,  # use OpenCV DNN for ONNX inference
         vid_stride=1,  # video frame-rate stride
 ):
+    # Video/image management
     source = str(source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     is_file = Path(source).suffix[1:] in (IMG_FORMATS + VID_FORMATS)
@@ -198,6 +199,8 @@ def run(
 
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
+
+    # Track delta-time with dt
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
     for path, im, im0s, vid_cap, s in dataset:
         with dt[0]:
@@ -235,6 +238,7 @@ def run(
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             imc = im0.copy() if save_crop else im0  # for save_crop
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
+
             if len(det):
                 # Rescale boxes from img_size to im0 size
                 det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
@@ -245,28 +249,18 @@ def run(
                     s += f"{names[int(c)]} "  # add to string
 
                 ######################################################################################################
-                
-                
+                # TODO Fix logic for parsing out faces
                 # Turn list into a string seperated by commas
-                # If class not 21
-                if int(c) != 21:
-                    test = s.split(" ")
-                    # print(test)
-                    test = test[2:-1]
-                    test = ', '.join(test)
-                    # print(test)
-                    # Publish items in test to RabbitMQ
-                    channel.basic_publish(exchange='', routing_key='detections', body=test)
-                
+                # if int(c) != 21:
+                publish_detections(s)
                 #####################################################################################################
+
+                # TODO Why reversed?
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
                     if save_txt:  # Write to file
-                        # print("here")
-                        p1, p2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
-                        # print(p1, p2)
+                        p1, p2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3])) #Corners of box
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                        # print(xywh)
                         # Print not normalized xywh
                         # print(xyxy2xywh(torch.tensor(xyxy).view(1, 4)).view(-1).tolist())
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
@@ -275,6 +269,7 @@ def run(
 
                     if save_img or save_crop or view_img:  # Add bbox to image
                         c = int(cls)  # integer class
+                        # TODO Refactor
                         if c == 21:
                             
                             p1, p2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
@@ -298,51 +293,20 @@ def run(
                     if save_crop:
                         save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
-                    
 
             # Stream results
             im0 = annotator.result()
 
             global MESSAGE_BODY, FILE
             if view_img:
-                if platform.system() == 'Linux' and p not in windows:
-                    windows.append(p)
-                    cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)  # allow window resize (Linux)
-                    cv2.resizeWindow(str(p), im0.shape[1], im0.shape[0])
-                cv2.imshow(str(p), im0)
-                
-                # if cv2.waitKey(1) & 0xFF == ord(' '): # wait for spacebar to be pressed
-                if MESSAGE_BODY == "add face":
-                    # Rect, img, name
-                    # face_box = cv2.cvtColor(im0[p1[1]:p2[1], p1[0]:p2[0]], cv2.COLOR_BGR2RGB)
-                    # On a different thread
-                    # Random name
-                    name = "face_" + uuid.uuid4().hex
-                    
-                    face_rec.insert_face(name, embeddings=embeddings, FILE=FILE)
-                    MESSAGE_BODY = None
-                    FILE = None
-                
-                cv2.waitKey(1)  # 1 millisecond
+                view_img(windows, p, im0, embeddings)  
 
             # Save results (image with detections)
             if save_img:
                 if dataset.mode == 'image':
                     cv2.imwrite(save_path, im0)
                 else:  # 'video' or 'stream'
-                    if vid_path[i] != save_path:  # new video
-                        vid_path[i] = save_path
-                        if isinstance(vid_writer[i], cv2.VideoWriter):
-                            vid_writer[i].release()  # release previous video writer
-                        if vid_cap:  # video
-                            fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        else:  # stream
-                            fps, w, h = 30, im0.shape[1], im0.shape[0]
-                        save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
-                        vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
-                    vid_writer[i].write(im0)
+                    save_video(vid_path, vid_writer, vid_cap, i, im0, save_path)
 
         # Print time (inference-only)
         # LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
@@ -354,7 +318,53 @@ def run(
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
     if update:
-        strip_optimizer(weights[0])  # update model (to fix SourceChangeWarning)
+        strip_optimizer(weights[0]) 
+
+def publish_detections(s):
+    test = s.split(" ")
+                # print(test)
+    test = test[2:-1]
+    test = ', '.join(test)
+                # print(test)
+                # Publish items in test to RabbitMQ
+    channel.basic_publish(exchange='', routing_key='detections', body=test)
+
+def view_img(windows, p, im0, embeddings):
+    if platform.system() == 'Linux' and p not in windows:
+        windows.append(p)
+        cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)  # allow window resize (Linux)
+        cv2.resizeWindow(str(p), im0.shape[1], im0.shape[0])
+    cv2.imshow(str(p), im0)
+                
+                # if cv2.waitKey(1) & 0xFF == ord(' '): # wait for spacebar to be pressed
+    if MESSAGE_BODY == "add face":
+                    # Rect, img, name
+                    # face_box = cv2.cvtColor(im0[p1[1]:p2[1], p1[0]:p2[0]], cv2.COLOR_BGR2RGB)
+                    # On a different thread
+                    # Random name
+        name = "face_" + uuid.uuid4().hex
+                    
+        face_rec.insert_face(name, embeddings=embeddings, FILE=FILE)
+        MESSAGE_BODY = None
+        FILE = None
+
+                # 1 millisecond
+    cv2.waitKey(1)
+
+def save_video(vid_path, vid_writer, vid_cap, i, im0, save_path):
+    if vid_path[i] != save_path:  # new video
+        vid_path[i] = save_path
+        if isinstance(vid_writer[i], cv2.VideoWriter):
+            vid_writer[i].release()  # release previous video writer
+        if vid_cap:  # video
+            fps = vid_cap.get(cv2.CAP_PROP_FPS)
+            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        else:  # stream
+            fps, w, h = 30, im0.shape[1], im0.shape[0]
+        save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
+        vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+    vid_writer[i].write(im0) # update model (to fix SourceChangeWarning)
 
 
 def parse_opt():

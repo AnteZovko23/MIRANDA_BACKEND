@@ -223,7 +223,7 @@ def run(
         # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
 
         # Process predictions
-        for i, det in enumerate(pred):  # per image
+        for i, det in enumerate(pred):  # per image (1 in this case since batch_size=1)
             seen += 1
             if webcam:  # batch_size >= 1
                 p, im0, frame = path[i], im0s[i].copy(), dataset.count
@@ -235,6 +235,7 @@ def run(
             save_path = str(save_dir / p.name)  # im.jpg
             txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # im.txt
             s += '%gx%g ' % im.shape[2:]  # print string
+            s_publish += s
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             imc = im0.copy() if save_crop else im0  # for save_crop
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
@@ -245,33 +246,27 @@ def run(
 
                 # Print results
                 for c in det[:, 5].unique():
-                    # n = (det[:, 5] == c).sum()  # detections per class
                     s += f"{names[int(c)]} "  # add to string
 
-                ######################################################################################################
-                # TODO Fix logic for parsing out faces
-                # Turn list into a string seperated by commas
-                # if int(c) != 21:
-                publish_detections(s)
-                #####################################################################################################
+                    if c == 21:
+                        s_publish+=f"{names[int(c)]} "  # add faces to string
 
-                # TODO Why reversed?
+                publish_detections(s_publish)
+
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
                     if save_txt:  # Write to file
                         p1, p2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3])) #Corners of box
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                        # Print not normalized xywh
-                        # print(xyxy2xywh(torch.tensor(xyxy).view(1, 4)).view(-1).tolist())
+
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
                         with open(f'{txt_path}.txt', 'a') as f:
                             f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
                     if save_img or save_crop or view_img:  # Add bbox to image
                         c = int(cls)  # integer class
-                        # TODO Refactor
-                        if c == 21:
-                            
+
+                        if c == 21: # Face
                             p1, p2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
                             rect = dlib.rectangle(p1[0], p1[1], p2[0], p2[1])
                             # landmarks = face_rec.get_landmarks(im0, rect)

@@ -40,6 +40,12 @@ import numpy as np
 import io
 import uuid
 import concurrent
+import openai
+
+openai.api_key = "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"
+
+MODEL="gpt-3.5-turbo"
+
 connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
 channel = connection.channel()
 
@@ -251,6 +257,7 @@ def run(
                     if c == 21:
                         s_publish+=f"{names[int(c)]} "  # add faces to string
 
+                # Publish to MQTT
                 publish_detections(s_publish)
 
                 # Write results

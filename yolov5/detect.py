@@ -30,10 +30,12 @@ Usage - formats:
 print("Opened")
 
 import argparse
+print("imported argparse")
 import os
 import platform
 import sys
 from pathlib import Path
+print("imported pathlib")
 import pika
 print("pre-dlib")
 import dlib

@@ -35,7 +35,9 @@ import platform
 import sys
 from pathlib import Path
 import pika
+print("pre-dlib")
 import dlib
+print("post-dlib")
 import Face_Recognition_Library as frl
 import numpy as np
 import io
